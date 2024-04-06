@@ -1,12 +1,15 @@
 package main
 
 import (
+	"aurora/internal/proxys"
 	"bufio"
+	"embed"
+	"io/fs"
+	"log"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
-
-	"aurora/internal/proxys"
 
 	"github.com/acheong08/endless"
 	"github.com/gin-gonic/gin"
@@ -52,6 +55,9 @@ func checkProxy() *proxys.IProxy {
 	return &proxyIP
 }
 
+//go:embed web/*
+var staticFiles embed.FS
+
 func registerRouter() *gin.Engine {
 	handler := NewHandle(
 		checkProxy(),
@@ -80,10 +86,18 @@ func registerRouter() *gin.Engine {
 	authGroup := router.Group("").Use(Authorization)
 	authGroup.POST("/v1/chat/completions", handler.nightmare)
 	authGroup.GET("/v1/models", handler.engines)
+
+	subFS, err := fs.Sub(staticFiles, "web")
+	if err != nil {
+		log.Fatal(err)
+	}
+	router.StaticFS("/web", http.FS(subFS))
+
 	return router
 }
 
 func main() {
+	gin.SetMode(gin.ReleaseMode)
 	router := registerRouter()
 
 	_ = godotenv.Load(".env")
