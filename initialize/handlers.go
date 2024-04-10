@@ -1,4 +1,4 @@
-package main
+package initialize
 
 import (
 	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
@@ -7,9 +7,11 @@ import (
 	"aurora/internal/proxys"
 	"aurora/internal/tokens"
 	officialtypes "aurora/typings/official"
+	"os"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"strings"
 )
 
 type Handler struct {
@@ -169,8 +171,7 @@ func (h *Handler) nightmare(c *gin.Context) {
 
 	uid := uuid.NewString()
 	client := bogdanfinn.NewStdClient()
-
-	turnStile, status, err := chatgpt.InitTurnStile(client, secret, proxyUrl, 5)
+	turnStile, status, err := chatgpt.InitTurnStile(client, secret, proxyUrl)
 	if err != nil {
 		c.JSON(status, gin.H{
 			"message": err.Error(),
@@ -192,11 +193,11 @@ func (h *Handler) nightmare(c *gin.Context) {
 
 	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, secret, turnStile.Arkose, proxyUrl)
 
-	response, err := chatgpt.POSTconversation(client, translated_request, secret, turnStile, proxyUrl, 5)
+	response, err := chatgpt.POSTconversation(client, translated_request, secret, turnStile, proxyUrl)
 
 	if err != nil {
 		c.JSON(500, gin.H{
-			"error": "error sending request",
+			"error": "request conversion error",
 		})
 		return
 	}
@@ -205,6 +206,10 @@ func (h *Handler) nightmare(c *gin.Context) {
 		return
 	}
 	var full_response string
+
+	if os.Getenv("STREAM_MODE") == "false" {
+		original_request.Stream = false
+	}
 	for i := 3; i > 0; i-- {
 		var continue_info *chatgpt.ContinueInfo
 		var response_part string
@@ -221,11 +226,11 @@ func (h *Handler) nightmare(c *gin.Context) {
 		if turnStile.Arkose {
 			chatgptrequestconverter.RenewTokenForRequest(&translated_request, secret.PUID, proxyUrl)
 		}
-		response, err = chatgpt.POSTconversation(client, translated_request, secret, turnStile, proxyUrl, 5)
+		response, err = chatgpt.POSTconversation(client, translated_request, secret, turnStile, proxyUrl)
 
 		if err != nil {
 			c.JSON(500, gin.H{
-				"error": "error sending request",
+				"error": "request conversion error",
 			})
 			return
 		}

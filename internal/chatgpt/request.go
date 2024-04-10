@@ -12,14 +12,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 
 	//http "github.com/bogdanfinn/fhttp"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
-	"github.com/joho/godotenv"
 	"io"
 	"net/url"
 	"os"
@@ -27,6 +23,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 )
 
 var BaseURL string
@@ -53,7 +54,7 @@ var (
 	connPool            = map[string][]*connInfo{}
 	poolMutex           = sync.Mutex{}
 	TurnStilePool       = map[string]*TurnStile{}
-	userAgent           = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+	userAgent           = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.0.0 Safari/537.36"
 )
 
 func getWSURL(client httpclient.AuroraHttpClient, token string, retry int) (string, error) {
@@ -156,7 +157,7 @@ func InitWSConn(client httpclient.AuroraHttpClient, token string, uuid string, p
 		if err != nil {
 			return err
 		}
-		createWSConn(client, wssURL, connInfo, 0)
+		err = createWSConn(client, wssURL, connInfo, 0)
 		if err != nil {
 			return err
 		}
@@ -213,25 +214,21 @@ type TurnStile struct {
 	ExpireAt       time.Time
 }
 
-func InitTurnStile(client httpclient.AuroraHttpClient, secret *tokens.Secret, proxy string, retry int) (*TurnStile, int, error) {
+func InitTurnStile(client httpclient.AuroraHttpClient, secret *tokens.Secret, proxy string) (*TurnStile, int, error) {
 	poolMutex.Lock()
 	defer poolMutex.Unlock()
 	currTurnToken := TurnStilePool[secret.Token]
 	if currTurnToken == nil || currTurnToken.ExpireAt.Before(time.Now()) {
 		response, err := POSTTurnStile(client, secret, proxy, 0)
 		if err != nil {
-			return nil, response.StatusCode, err
+			return nil, http.StatusInternalServerError, err
 		}
 		defer response.Body.Close()
-		if response.StatusCode != 200 && retry > 0 {
-			return InitTurnStile(client, secret, proxy, retry-1)
-		} else if retry <= 0 {
-			return nil, response.StatusCode, errors.New("response status code is not 200")
+		if response.StatusCode != 200 {
+			return nil, response.StatusCode, fmt.Errorf("failed to get chat requirements")
 		}
 		var result chatgpt_types.RequirementsResponse
-		if err := json.NewDecoder(response.Body).Decode(&result); err != nil && retry > 0 {
-			return InitTurnStile(client, secret, proxy, retry-1)
-		} else if err != nil && retry <= 0 {
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 			return nil, response.StatusCode, err
 		}
 		currTurnToken = &TurnStile{
@@ -249,7 +246,6 @@ func POSTTurnStile(client httpclient.AuroraHttpClient, secret *tokens.Secret, pr
 	}
 	apiUrl := BaseURL + "/sentinel/chat-requirements"
 	payload := strings.NewReader(`{"conversation_mode_kind":"primary_assistant"}`)
-
 	header := make(httpclient.AuroraHeaders)
 	header.Set("Content-Type", "application/json")
 	header.Set("User-Agent", userAgent)
@@ -269,7 +265,7 @@ func POSTTurnStile(client httpclient.AuroraHttpClient, secret *tokens.Secret, pr
 	}
 	if response.StatusCode == 401 && secret.IsFree {
 		if retry > 3 {
-			return &http.Response{}, err
+			return response, err
 		}
 		time.Sleep(time.Second * 2)
 		secret.Token = uuid.NewString()
@@ -313,7 +309,7 @@ func getURLAttribution(client httpclient.AuroraHttpClient, access_token string, 
 	return attr.Attribution
 }
 
-func POSTconversation(client httpclient.AuroraHttpClient, message chatgpt_types.ChatGPTRequest, secret *tokens.Secret, chat_token *TurnStile, proxy string, retry int) (*http.Response, error) {
+func POSTconversation(client httpclient.AuroraHttpClient, message chatgpt_types.ChatGPTRequest, secret *tokens.Secret, chat_token *TurnStile, proxy string) (*http.Response, error) {
 	if proxy != "" {
 		client.SetProxy(proxy)
 	}
@@ -353,10 +349,10 @@ func POSTconversation(client httpclient.AuroraHttpClient, message chatgpt_types.
 		header.Set("oai-device-id", secret.Token)
 	}
 	response, err := client.Request(http.MethodPost, apiUrl, header, nil, bytes.NewBuffer(body_json))
-	if err != nil && retry > 0 {
-		return POSTconversation(client, message, secret, chat_token, proxy, retry+1)
+	if err != nil {
+		return nil, err
 	}
-	return response, err
+	return response, nil
 }
 
 type EnginesData struct {
@@ -422,7 +418,7 @@ func Handle_request_error(c *gin.Context, response *http.Response) bool {
 		if err != nil {
 			// Read response body
 			body, _ := io.ReadAll(response.Body)
-			c.JSON(500, gin.H{"error": gin.H{
+			c.JSON(response.StatusCode, gin.H{"error": gin.H{
 				"message": "Unknown error",
 				"type":    "internal_server_error",
 				"param":   nil,
@@ -636,8 +632,8 @@ func Handler(c *gin.Context, response *http.Response, client httpclient.AuroraHt
 					attr := urlAttrMap[citation.Metadata.URL]
 					if attr == "" {
 						u, _ := url.Parse(citation.Metadata.URL)
-						baseURL := u.Scheme + "://" + u.Host + "/"
-						attr = getURLAttribution(client, secret.Token, secret.PUID, baseURL)
+						BaseURL := u.Scheme + "://" + u.Host + "/"
+						attr = getURLAttribution(client, secret.Token, secret.PUID, BaseURL)
 						if attr != "" {
 							urlAttrMap[citation.Metadata.URL] = attr
 						}
@@ -692,15 +688,15 @@ func Handler(c *gin.Context, response *http.Response, client httpclient.AuroraHt
 				waitSource = true
 				continue
 			}
+		endProcess:
 			isRole = false
 			if stream {
 				_, err = c.Writer.WriteString(response_string)
 				if err != nil {
 					return "", nil
 				}
+				c.Writer.Flush()
 			}
-		endProcess:
-			c.Writer.Flush()
 
 			if original_response.Message.Metadata.FinishDetails != nil {
 				if original_response.Message.Metadata.FinishDetails.Type == "max_tokens" {
