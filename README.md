@@ -1,11 +1,11 @@
 # AURORA
 
+已闭源发布，只用开源的可以绕行
+
 [README_EN](https://github.com/aurora-develop/aurora/blob/main/README_EN.md)
 
 （带UI）免费的GPT3.5，支持使用3.5的access 调用
 
-# 交流群
-https://t.me/aurora_develop
 
 # Web端 
 
@@ -30,17 +30,9 @@ docker run -d \
 ## 更新容器
 
 ```bash
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower -cR free-gpt3.5-2api --debug
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower -cR aurora --debug
 ```
-### 编译部署
-
-```bash
-git clone https://github.com/aurora-develop/aurora
-cd aurora
-go build -o aurora
-chmod +x ./aurora
-./aurora
-```
+## 现闭源发布
 
 ## Deploy
 
